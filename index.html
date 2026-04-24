@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Monitor de Leilões — Fundação Manuel Cargaleiro</title>
-  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Georgia&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -40,7 +40,7 @@ const AT_HEADS = { "Authorization": `Bearer ${AT_TOKEN}`, "Content-Type": "appli
 
 function fromAT(rec) {
   const f = rec.fields;
-  return { id: rec.id, titulo: f["Título"]||"", casa: f["Casa de Leilões"]||"", pais: f["País"]||"", data: f["Data"]||"", estimativaMin: f["Estimativa Mínima"]||null, estimativaMax: f["Estimativa Máxima"]||null, precoMartelo: f["Preço Martelo"]||null, precoFinal: f["Preço Final"]||null, tecnica: f["Técnica"]||"", dimensoes: f["Dimensões"]||"", estado: f["Estado"]||"", url: f["URL do Lote"]||"", notas: f["Notas"]||"" };
+  return { id: rec.id, titulo: f["Título"]||"", casa: f["Casa de Leilões"]||"", pais: f["País"]||"", data: f["Data"]||"", precoFinal: f["Preço Final"]||null, tecnica: f["Técnica"]||"", dimensoes: f["Dimensões"]||"", url: f["URL do Lote"]||"", notas: f["Notas"]||"" };
 }
 
 function toAT(o) {
@@ -49,13 +49,9 @@ function toAT(o) {
   if (o.casa) f["Casa de Leilões"] = o.casa;
   if (o.pais) f["País"] = o.pais;
   if (o.data) f["Data"] = o.data;
-  if (o.estimativaMin) f["Estimativa Mínima"] = +o.estimativaMin;
-  if (o.estimativaMax) f["Estimativa Máxima"] = +o.estimativaMax;
-  if (o.precoMartelo) f["Preço Martelo"] = +o.precoMartelo;
   if (o.precoFinal) f["Preço Final"] = +o.precoFinal;
   if (o.tecnica) f["Técnica"] = o.tecnica;
   if (o.dimensoes) f["Dimensões"] = o.dimensoes;
-  if (o.estado) f["Estado"] = o.estado;
   if (o.url) f["URL do Lote"] = o.url;
   if (o.notas) f["Notas"] = o.notas;
   return f;
@@ -75,6 +71,18 @@ const CASAS = [
 const fmt = v => v ? new Intl.NumberFormat("pt-PT", { style:"currency", currency:"EUR", maximumFractionDigits:0 }).format(v) : "—";
 const fmtDate = d => d ? new Date(d).toLocaleDateString("pt-PT", { day:"2-digit", month:"short", year:"numeric" }) : "—";
 
+// Calcular valor por cm²
+function calcCm2(precoFinal, dimensoes) {
+  if (!precoFinal || !dimensoes) return null;
+  const match = dimensoes.match(/(\d+[\.,]?\d*)\s*[×xX]\s*(\d+[\.,]?\d*)/);
+  if (!match) return null;
+  const w = parseFloat(match[1].replace(",", "."));
+  const h = parseFloat(match[2].replace(",", "."));
+  if (!w || !h) return null;
+  const area = w * h;
+  return Math.round(precoFinal / area);
+}
+
 function IconLink() {
   return <svg width="12" height="12" viewBox="0 0 13 13" fill="none"><path d="M5 2.5H2.5C1.948 2.5 1.5 2.948 1.5 3.5V10.5C1.5 11.052 1.948 11.5 2.5 11.5H9.5C10.052 11.5 10.5 11.052 10.5 10.5V8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/><path d="M7.5 1.5H11.5V5.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M11.5 1.5L6 7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>;
 }
@@ -88,15 +96,16 @@ function App() {
   const [obras, setObras] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const [erro, setErro] = useState(null);
   const [tab, setTab] = useState("dashboard");
   const [filtro, setFiltro] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [obraDetalhe, setObraDetalhe] = useState(null);
-  const [scanStatus, setScanStatus] = useState("idle");
   const [lastScan, setLastScan] = useState("Nunca realizada");
-  const emptyForm = { titulo:"", casa:"", pais:"", data:"", estimativaMin:"", estimativaMax:"", precoMartelo:"", precoFinal:"", tecnica:"", dimensoes:"", estado:"Vendida", url:"", notas:"" };
+  const emptyForm = { titulo:"", casa:"", pais:"", data:"", precoFinal:"", tecnica:"", dimensoes:"", url:"", notas:"" };
   const [form, setForm] = useState(emptyForm);
+  const [extractUrl, setExtractUrl] = useState("");
 
   async function carregarObras() {
     setLoading(true); setErro(null);
@@ -105,11 +114,83 @@ function App() {
       if (!res.ok) throw new Error();
       const data = await res.json();
       setObras((data.records||[]).map(fromAT));
-    } catch(e) { setErro("Não foi possível ligar ao Airtable. Verifica a ligação à internet."); }
+    } catch(e) { setErro("Não foi possível ligar ao Airtable."); }
     finally { setLoading(false); }
   }
 
   useEffect(() => { carregarObras(); }, []);
+
+  // Extracção automática de dados a partir de URL
+  async function extrairDados() {
+    if (!extractUrl) return;
+    setExtracting(true);
+    try {
+      // Usar allorigins como proxy para contornar CORS
+      const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(extractUrl)}`;
+      const res = await fetch(proxy);
+      const data = await res.json();
+      const html = data.contents || "";
+
+      // Extrair título
+      let titulo = "";
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      if (titleMatch) titulo = titleMatch[1].replace(/\s*[-|].*$/, "").trim();
+
+      // Tentar extrair da meta og:title (mais limpo)
+      const ogTitle = html.match(/og:title[^>]*content="([^"]+)"/i) || html.match(/content="([^"]+)"[^>]*og:title/i);
+      if (ogTitle) titulo = ogTitle[1].trim();
+
+      // Detectar casa de leilões pelo domínio
+      let casa = "";
+      let pais = "";
+      if (extractUrl.includes("christies")) { casa = "Christie's"; pais = "França"; }
+      else if (extractUrl.includes("sothebys")) { casa = "Sotheby's"; pais = "Internacional"; }
+      else if (extractUrl.includes("drouot")) { casa = "Drouot"; pais = "França"; }
+      else if (extractUrl.includes("cabral-moncada") || extractUrl.includes("cabral_moncada")) { casa = "Cabral Moncada Leilões"; pais = "Portugal"; }
+      else if (extractUrl.includes("pcvelho") || extractUrl.includes("correiovelho")) { casa = "Palácio do Correio Velho"; pais = "Portugal"; }
+      else if (extractUrl.includes("veritas")) { casa = "Veritas"; pais = "Portugal"; }
+      else if (extractUrl.includes("bonhams")) { casa = "Bonhams"; pais = "Internacional"; }
+      else if (extractUrl.includes("invaluable")) { casa = "Invaluable"; pais = "Internacional"; }
+      else if (extractUrl.includes("mutualart")) { casa = "Mutualart"; pais = "Internacional"; }
+
+      // Extrair estimativa/preço — padrões comuns
+      let precoFinal = "";
+      const precoPatterns = [
+        /hammer price[^€$£]*[€$£]\s*([\d,\.]+)/i,
+        /sold for[^€$£]*[€$£]\s*([\d,\.]+)/i,
+        /result[^€$£]*[€$£]\s*([\d,\.]+)/i,
+        /€\s*([\d\s,\.]+)/,
+      ];
+      for (const p of precoPatterns) {
+        const m = html.match(p);
+        if (m) { precoFinal = m[1].replace(/[\s,]/g, "").replace(".", ""); break; }
+      }
+
+      // Extrair dimensões
+      let dimensoes = "";
+      const dimMatch = html.match(/(\d+[\.,]?\d*)\s*[×xX]\s*(\d+[\.,]?\d*)\s*cm/i);
+      if (dimMatch) dimensoes = `${dimMatch[1]}×${dimMatch[2]} cm`;
+
+      setForm(p => ({
+        ...p,
+        titulo: titulo || p.titulo,
+        casa: casa || p.casa,
+        pais: pais || p.pais,
+        precoFinal: precoFinal || p.precoFinal,
+        dimensoes: dimensoes || p.dimensoes,
+        url: extractUrl,
+      }));
+
+      if (!showForm) setShowForm(true);
+
+    } catch(e) {
+      alert("Não foi possível extrair dados deste URL. Preenche os campos manualmente.");
+      setForm(p => ({ ...p, url: extractUrl }));
+      setShowForm(true);
+    } finally {
+      setExtracting(false);
+    }
+  }
 
   async function handleAdd(e) {
     e.preventDefault(); setSaving(true);
@@ -118,19 +199,17 @@ function App() {
       if (!res.ok) throw new Error();
       const data = await res.json();
       setObras(p => [fromAT(data), ...p]);
-      setShowForm(false); setForm(emptyForm);
+      setShowForm(false); setForm(emptyForm); setExtractUrl("");
     } catch(e) { alert("Erro ao guardar a obra. Tenta novamente."); }
     finally { setSaving(false); }
   }
 
-  function scan() {
-    setScanStatus("scanning");
-    setTimeout(() => { setScanStatus("done"); setLastScan(new Date().toLocaleString("pt-PT")); carregarObras(); setTimeout(() => setScanStatus("idle"), 3000); }, 2500);
-  }
-
   function exportCSV() {
-    const h = ["Título","Casa","País","Data","Est.Mín","Est.Máx","Martelo","Final","Técnica","Dimensões","Estado","URL"];
-    const rows = obras.map(o => [o.titulo,o.casa,o.pais,o.data,o.estimativaMin||"",o.estimativaMax||"",o.precoMartelo||"",o.precoFinal||"",o.tecnica,o.dimensoes,o.estado,o.url||""]);
+    const h = ["Título","Casa","País","Data","Preço Final","€/cm²","Técnica","Dimensões","URL"];
+    const rows = obras.map(o => {
+      const cm2 = calcCm2(o.precoFinal, o.dimensoes);
+      return [o.titulo, o.casa, o.pais, o.data, o.precoFinal||"", cm2||"", o.tecnica, o.dimensoes, o.url||""];
+    });
     const csv = [h,...rows].map(r=>r.join(";")).join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"}));
@@ -138,13 +217,12 @@ function App() {
     a.click();
   }
 
-  const vendidas = obras.filter(o => o.estado === "Vendida");
-  const totalVendas = vendidas.reduce((s,o) => s+(o.precoFinal||0), 0);
-  const mediaVenda = vendidas.length ? Math.round(totalVendas/vendidas.length) : 0;
-  const maxVenda = Math.max(1, ...vendidas.map(o => o.precoFinal||0));
+  const comVenda = obras.filter(o => o.precoFinal);
+  const totalVendas = comVenda.reduce((s,o) => s+(o.precoFinal||0), 0);
+  const mediaVenda = comVenda.length ? Math.round(totalVendas/comVenda.length) : 0;
+  const maxVenda = Math.max(1, ...comVenda.map(o => o.precoFinal||0));
   const obrasFiltradas = obras.filter(o => o.titulo.toLowerCase().includes(filtro.toLowerCase()) || o.casa.toLowerCase().includes(filtro.toLowerCase()));
 
-  const badgeStyle = e => e==="Vendida" ? {background:"#F2F8F2",color:"#1E5C1E",border:"1px solid #C0DCC0"} : e==="A Decorrer" ? {background:"#FFF9EC",color:"#7A5800",border:"1px solid #E8D490"} : {background:"#FDF2F2",color:WINE,border:"1px solid #E8C0C0"};
   const card = { background:BG, border:`1px solid ${BORDER}`, borderRadius:3, padding:"22px 24px" };
   const lbl = { fontSize:10, letterSpacing:1.8, textTransform:"uppercase", color:GRAY, marginBottom:6, display:"block", fontFamily:"Oswald, sans-serif" };
   const inp = { background:BG, border:`1px solid ${BORDER}`, color:BLACK, fontFamily:"Georgia,serif", fontSize:13, padding:"8px 12px", borderRadius:3, width:"100%", outline:"none" };
@@ -155,19 +233,24 @@ function App() {
 
       {obraDetalhe && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.4)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center" }} onClick={() => setObraDetalhe(null)}>
-          <div style={{ background:BG, border:`1px solid ${BORDER}`, borderRadius:4, padding:"32px 36px", maxWidth:540, width:"90%", position:"relative" }} onClick={e=>e.stopPropagation()}>
+          <div style={{ background:BG, border:`1px solid ${BORDER}`, borderRadius:4, padding:"32px 36px", maxWidth:560, width:"90%", position:"relative" }} onClick={e=>e.stopPropagation()}>
             <button onClick={() => setObraDetalhe(null)} style={{ position:"absolute", top:14, right:18, background:"none", border:"none", cursor:"pointer", color:GRAY, fontSize:20 }}>×</button>
             <div style={{ fontSize:10, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:6, fontFamily:"Oswald, sans-serif" }}>{obraDetalhe.casa} · {obraDetalhe.pais}</div>
             <div style={{ fontSize:19, color:WINE, marginBottom:6, fontFamily:"Oswald, sans-serif", fontWeight:600 }}>{obraDetalhe.titulo}</div>
             <div style={{ fontSize:12, color:GRAY, marginBottom:22 }}>{obraDetalhe.tecnica} · {obraDetalhe.dimensoes} · {fmtDate(obraDetalhe.data)}</div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:22 }}>
-              {[["Estimativa",`${fmt(obraDetalhe.estimativaMin)} – ${fmt(obraDetalhe.estimativaMax)}`],["Preço de martelo",fmt(obraDetalhe.precoMartelo)],["Preço final c/ comissões",fmt(obraDetalhe.precoFinal)],["Estado",obraDetalhe.estado]].map(([l,v]) => (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:22 }}>
+              {[
+                ["Preço de venda", fmt(obraDetalhe.precoFinal)],
+                ["Valor por cm²", calcCm2(obraDetalhe.precoFinal, obraDetalhe.dimensoes) ? fmt(calcCm2(obraDetalhe.precoFinal, obraDetalhe.dimensoes)) + "/cm²" : "—"],
+                ["Área total", (() => { const m = obraDetalhe.dimensoes && obraDetalhe.dimensoes.match(/(\d+[\.,]?\d*)\s*[×xX]\s*(\d+[\.,]?\d*)/); return m ? `${Math.round(parseFloat(m[1])*parseFloat(m[2]))} cm²` : "—"; })()],
+              ].map(([l,v]) => (
                 <div key={l} style={{ borderBottom:`1px solid ${BORDER}`, paddingBottom:10 }}>
                   <div style={{ fontSize:10, letterSpacing:1.5, textTransform:"uppercase", color:GRAY, marginBottom:4, fontFamily:"Oswald, sans-serif" }}>{l}</div>
-                  <div style={{ fontSize:14, color:BLACK }}>{v}</div>
+                  <div style={{ fontSize:14, color: l==="Valor por cm²" ? WINE : BLACK, fontFamily: l==="Valor por cm²" ? "Oswald, sans-serif" : "Georgia, serif", fontWeight: l==="Valor por cm²" ? 600 : 400 }}>{v}</div>
                 </div>
               ))}
             </div>
+            {obraDetalhe.notas && <div style={{ marginBottom:16, fontSize:13, color:GRAY, fontStyle:"italic", lineHeight:1.7 }}>{obraDetalhe.notas}</div>}
             <div style={{ background:BG2, border:`1px solid ${BORDER}`, borderRadius:3, padding:"14px 16px" }}>
               <div style={{ fontSize:10, letterSpacing:1.5, textTransform:"uppercase", color:GRAY, marginBottom:8, fontFamily:"Oswald, sans-serif" }}>Link do lote no leilão</div>
               {obraDetalhe.url ? <a href={obraDetalhe.url} target="_blank" rel="noopener noreferrer" style={{ color:WINE, fontSize:13, wordBreak:"break-all", display:"flex", alignItems:"center", gap:6 }}><IconLink /> {obraDetalhe.url}</a> : <span style={{ fontSize:13, color:"#CCC", fontStyle:"italic" }}>Nenhum link registado.</span>}
@@ -176,9 +259,9 @@ function App() {
         </div>
       )}
 
-      {/* Header com logótipo */}
+      {/* Header */}
       <div style={{ borderBottom:`1px solid ${BORDER}`, padding:"0 36px", display:"flex", alignItems:"center", justifyContent:"space-between", background:"#FAFAF9" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:0 }}>
+        <div style={{ display:"flex", alignItems:"center" }}>
           <img src={`data:image/png;base64,${window.LOGO_B64}`} alt="Fundação Cargaleiro" style={{ height:64, width:"auto" }} />
           <div style={{ borderLeft:`1px solid ${BORDER}`, paddingLeft:20, marginLeft:4 }}>
             <div style={{ fontSize:11, letterSpacing:3, textTransform:"uppercase", color:GRAY, fontFamily:"Oswald, sans-serif", fontWeight:500, marginBottom:2 }}>Monitor de</div>
@@ -187,10 +270,10 @@ function App() {
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:16 }}>
           <div style={{ textAlign:"right" }}>
-            <div style={{ fontSize:10, letterSpacing:1.5, textTransform:"uppercase", color:GRAY, fontFamily:"Oswald, sans-serif", marginBottom:3 }}>Última verificação</div>
+            <div style={{ fontSize:10, letterSpacing:1.5, textTransform:"uppercase", color:GRAY, fontFamily:"Oswald, sans-serif", marginBottom:3 }}>Última actualização</div>
             <div style={{ fontSize:12, color:BLACK }}>{lastScan}</div>
           </div>
-          <button onClick={carregarObras} style={{ background:"none", border:`1px solid ${BORDER}`, color:GRAY, cursor:"pointer", fontFamily:"Oswald, sans-serif", fontSize:11, padding:"6px 12px", borderRadius:3 }}>↺ Actualizar</button>
+          <button onClick={() => { carregarObras(); setLastScan(new Date().toLocaleString("pt-PT")); }} style={{ background:"none", border:`1px solid ${BORDER}`, color:GRAY, cursor:"pointer", fontFamily:"Oswald, sans-serif", fontSize:11, padding:"6px 12px", borderRadius:3 }}>↺ Actualizar</button>
         </div>
       </div>
 
@@ -204,34 +287,27 @@ function App() {
       <div style={{ padding:"30px 36px", maxWidth:1100 }}>
 
         {loading && <div style={{ textAlign:"center", padding:"60px 0", color:GRAY, fontSize:14, fontStyle:"italic" }}>A carregar dados do Airtable...</div>}
-        {erro && <div style={{ background:"#FDF2F2", border:`1px solid #E8C0C0`, borderRadius:3, padding:"16px 20px", color:WINE, fontSize:13, marginBottom:20 }}>{erro}</div>}
+        {erro && <div style={{ background:"#FDF2F2", border:"1px solid #E8C0C0", borderRadius:3, padding:"16px 20px", color:WINE, fontSize:13, marginBottom:20 }}>{erro}</div>}
 
         {!loading && tab==="dashboard" && <>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:24 }}>
-            {[[obras.length,"Obras registadas"],[vendidas.length,"Vendidas"],[fmt(totalVendas),"Volume total"],[fmt(mediaVenda),"Média por obra"]].map(([n,l],i) => (
+            {[[obras.length,"Obras registadas"],[comVenda.length,"Com preço de venda"],[fmt(totalVendas),"Volume total"],[fmt(mediaVenda),"Média por obra"]].map(([n,l],i) => (
               <div key={i} style={card}>
                 <div style={{ fontSize:28, color:WINE, marginBottom:5, fontFamily:"Oswald, sans-serif", fontWeight:600 }}>{n}</div>
                 <div style={{ fontSize:10, letterSpacing:1.8, textTransform:"uppercase", color:GRAY, fontFamily:"Oswald, sans-serif" }}>{l}</div>
               </div>
             ))}
           </div>
+
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
             <div style={card}>
-              <div style={{ fontSize:11, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:14, fontFamily:"Oswald, sans-serif" }}>Verificação automática</div>
-              <p style={{ fontSize:13, color:GRAY, lineHeight:1.8, marginBottom:16 }}>Pesquisa semanal nas casas ativas por obras de Manuel Cargaleiro.</p>
-              <button onClick={scan} disabled={scanStatus==="scanning"} style={{ background:WINE, color:"#FFF", border:"none", cursor:"pointer", fontFamily:"Oswald, sans-serif", fontWeight:600, fontSize:13, letterSpacing:1, padding:"10px 20px", borderRadius:3, width:"100%", opacity:scanStatus==="scanning"?0.7:1 }}>
-                {scanStatus==="scanning"?"A verificar...":scanStatus==="done"?"✓  Concluído":"Verificar agora"}
-              </button>
-              {scanStatus==="done" && <div style={{ marginTop:8, fontSize:11, color:"#1E5C1E", textAlign:"center" }}>Dados actualizados do Airtable.</div>}
-            </div>
-            <div style={card}>
               <div style={{ fontSize:11, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:14, fontFamily:"Oswald, sans-serif" }}>Preços de venda</div>
-              {vendidas.length===0 ? <div style={{ fontSize:13, color:GRAY, fontStyle:"italic" }}>Sem obras vendidas registadas.</div> :
+              {comVenda.length===0 ? <div style={{ fontSize:13, color:GRAY, fontStyle:"italic" }}>Sem obras com preço de venda registado.</div> :
               <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                {vendidas.slice(0,5).map((o,i) => (
+                {comVenda.slice(0,5).map((o,i) => (
                   <div key={i}>
                     <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-                      <span style={{ fontSize:12, color:GRAY, maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{o.titulo}</span>
+                      <span style={{ fontSize:12, color:GRAY, maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{o.titulo}</span>
                       <span style={{ fontSize:12, color:WINE, fontFamily:"Oswald, sans-serif" }}>{fmt(o.precoFinal)}</span>
                     </div>
                     <div style={{ background:BORDER, height:3, borderRadius:2 }}>
@@ -241,7 +317,29 @@ function App() {
                 ))}
               </div>}
             </div>
+            <div style={card}>
+              <div style={{ fontSize:11, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:14, fontFamily:"Oswald, sans-serif" }}>Valor por cm²</div>
+              {comVenda.filter(o => calcCm2(o.precoFinal, o.dimensoes)).length===0 ? <div style={{ fontSize:13, color:GRAY, fontStyle:"italic" }}>Sem dados de dimensões registados.</div> :
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {comVenda.filter(o => calcCm2(o.precoFinal, o.dimensoes)).slice(0,5).map((o,i) => {
+                  const cm2 = calcCm2(o.precoFinal, o.dimensoes);
+                  const maxCm2 = Math.max(...comVenda.filter(x => calcCm2(x.precoFinal, x.dimensoes)).map(x => calcCm2(x.precoFinal, x.dimensoes)));
+                  return (
+                    <div key={i}>
+                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                        <span style={{ fontSize:12, color:GRAY, maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{o.titulo}</span>
+                        <span style={{ fontSize:12, color:WINE, fontFamily:"Oswald, sans-serif" }}>{fmt(cm2)}/cm²</span>
+                      </div>
+                      <div style={{ background:BORDER, height:3, borderRadius:2 }}>
+                        <div style={{ background:"#C4763A", height:3, borderRadius:2, width:`${(cm2/maxCm2)*100}%` }}/>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>}
+            </div>
           </div>
+
           <div style={card}>
             <div style={{ fontSize:11, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:14, fontFamily:"Oswald, sans-serif" }}>Obras recentes</div>
             {obras.length===0 ? <div style={{ padding:"20px 0", textAlign:"center", color:GRAY, fontSize:13, fontStyle:"italic" }}>Nenhuma obra registada ainda.</div> :
@@ -251,10 +349,12 @@ function App() {
                   <div style={{ fontSize:14, color:BLACK, marginBottom:3 }}>{o.titulo}</div>
                   <div style={{ fontSize:11, color:GRAY }}>{o.casa} · {fmtDate(o.data)}</div>
                 </div>
-                <div style={{ display:"flex", alignItems:"center", gap:12 }} onClick={e=>e.stopPropagation()}>
+                <div style={{ display:"flex", alignItems:"center", gap:14 }} onClick={e=>e.stopPropagation()}>
                   <LinkBtn url={o.url}/>
-                  <div style={{ fontSize:15, color:WINE, fontFamily:"Oswald, sans-serif", fontWeight:600 }}>{fmt(o.precoFinal)}</div>
-                  <span style={{ ...bdg, ...badgeStyle(o.estado) }}>{o.estado}</span>
+                  <div style={{ textAlign:"right" }}>
+                    <div style={{ fontSize:15, color:WINE, fontFamily:"Oswald, sans-serif", fontWeight:600 }}>{fmt(o.precoFinal)}</div>
+                    {calcCm2(o.precoFinal, o.dimensoes) && <div style={{ fontSize:10, color:GRAY, fontFamily:"Oswald, sans-serif" }}>{fmt(calcCm2(o.precoFinal, o.dimensoes))}/cm²</div>}
+                  </div>
                 </div>
               </div>
             ))}
@@ -263,17 +363,40 @@ function App() {
         </>}
 
         {!loading && tab==="obras" && <>
+          {/* Extracção por URL */}
+          <div style={{ ...card, marginBottom:18, borderLeft:`3px solid ${WINE}`, borderRadius:"0 3px 3px 0" }}>
+            <div style={{ fontSize:11, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:12, fontFamily:"Oswald, sans-serif" }}>Registar obra a partir de URL</div>
+            <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+              <input
+                style={{ ...inp, flex:1, fontFamily:"monospace", fontSize:12 }}
+                placeholder="Colar o link da página do lote — ex: https://www.christies.com/lot/..."
+                value={extractUrl}
+                onChange={e => setExtractUrl(e.target.value)}
+              />
+              <button
+                onClick={extrairDados}
+                disabled={!extractUrl || extracting}
+                style={{ background:WINE, color:"#FFF", border:"none", cursor:"pointer", fontFamily:"Oswald, sans-serif", fontWeight:600, fontSize:12, padding:"9px 20px", borderRadius:3, whiteSpace:"nowrap", opacity:(!extractUrl||extracting)?0.6:1 }}>
+                {extracting ? "A extrair..." : "⟳ Extrair dados"}
+              </button>
+            </div>
+            <div style={{ marginTop:8, fontSize:11, color:GRAY, fontStyle:"italic" }}>Cola o URL do lote — o sistema tenta preencher os campos automaticamente. Podes sempre corrigir os valores antes de guardar.</div>
+          </div>
+
           <div style={{ display:"flex", gap:10, marginBottom:18, alignItems:"center" }}>
             <input style={{ ...inp, flex:1 }} placeholder="Pesquisar por título ou casa..." value={filtro} onChange={e=>setFiltro(e.target.value)}/>
             <button onClick={exportCSV} style={{ background:"none", border:`1px solid ${BORDER}`, color:GRAY, cursor:"pointer", fontFamily:"Oswald, sans-serif", fontSize:12, padding:"9px 18px", borderRadius:3 }}>↓ Exportar CSV</button>
-            <button onClick={() => setShowForm(true)} style={{ background:WINE, color:"#FFF", border:"none", cursor:"pointer", fontFamily:"Oswald, sans-serif", fontWeight:600, fontSize:12, padding:"9px 18px", borderRadius:3 }}>+ Registar obra</button>
+            <button onClick={() => { setShowForm(true); setExtractUrl(""); }} style={{ background:WINE, color:"#FFF", border:"none", cursor:"pointer", fontFamily:"Oswald, sans-serif", fontWeight:600, fontSize:12, padding:"9px 18px", borderRadius:3 }}>+ Registar manualmente</button>
           </div>
+
           {showForm && (
             <div style={{ ...card, marginBottom:18 }}>
-              <div style={{ fontSize:11, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:18, fontFamily:"Oswald, sans-serif" }}>Nova obra</div>
+              <div style={{ fontSize:11, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:18, fontFamily:"Oswald, sans-serif" }}>
+                {extractUrl ? "Dados extraídos — confirmar e guardar" : "Nova obra"}
+              </div>
               <form onSubmit={handleAdd}>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:14 }}>
-                  {[["titulo","Título"],["casa","Casa de leilões"],["tecnica","Técnica"],["dimensoes","Dimensões"]].map(([f,l]) => (
+                  {[["titulo","Título"],["casa","Casa de leilões"],["tecnica","Técnica"],["dimensoes","Dimensões (ex: 80×60 cm)"]].map(([f,l]) => (
                     <div key={f}><label style={lbl}>{l}</label><input style={inp} value={form[f]} onChange={e=>setForm(p=>({...p,[f]:e.target.value}))} required={f==="titulo"}/></div>
                   ))}
                   <div><label style={lbl}>País</label>
@@ -282,54 +405,56 @@ function App() {
                     </select>
                   </div>
                   <div><label style={lbl}>Data</label><input type="date" style={inp} value={form.data} onChange={e=>setForm(p=>({...p,data:e.target.value}))}/></div>
-                  <div><label style={lbl}>Estado</label>
-                    <select style={inp} value={form.estado} onChange={e=>setForm(p=>({...p,estado:e.target.value}))}>
-                      <option>Vendida</option><option>Não Vendida</option><option>A Decorrer</option>
-                    </select>
-                  </div>
-                  {[["estimativaMin","Est. mínima (€)"],["estimativaMax","Est. máxima (€)"],["precoMartelo","Preço martelo (€)"],["precoFinal","Preço final c/ comissões (€)"]].map(([f,l]) => (
-                    <div key={f}><label style={lbl}>{l}</label><input type="number" style={inp} value={form[f]} onChange={e=>setForm(p=>({...p,[f]:e.target.value}))}/></div>
-                  ))}
+                  <div><label style={lbl}>Preço de venda (€)</label><input type="number" style={inp} value={form.precoFinal} onChange={e=>setForm(p=>({...p,precoFinal:e.target.value}))}/></div>
                   <div style={{ gridColumn:"1 / -1" }}>
-                    <label style={lbl}>URL do lote no leilão</label>
-                    <input type="url" style={{ ...inp, fontFamily:"monospace", fontSize:12 }} placeholder="https://www.casadeleiloes.com/lote/..." value={form.url} onChange={e=>setForm(p=>({...p,url:e.target.value}))}/>
+                    <label style={lbl}>URL do lote</label>
+                    <input type="url" style={{ ...inp, fontFamily:"monospace", fontSize:12 }} value={form.url} onChange={e=>setForm(p=>({...p,url:e.target.value}))}/>
                   </div>
                   <div style={{ gridColumn:"1 / -1" }}>
                     <label style={lbl}>Notas</label>
-                    <textarea style={{ ...inp, height:70, resize:"vertical" }} value={form.notas} onChange={e=>setForm(p=>({...p,notas:e.target.value}))}/>
+                    <textarea style={{ ...inp, height:60, resize:"vertical" }} value={form.notas} onChange={e=>setForm(p=>({...p,notas:e.target.value}))}/>
                   </div>
                 </div>
+                {form.dimensoes && form.precoFinal && calcCm2(+form.precoFinal, form.dimensoes) && (
+                  <div style={{ background:"#FDF2F2", border:`1px solid #E8C0C0`, borderRadius:3, padding:"10px 14px", marginBottom:14, display:"flex", alignItems:"center", gap:8 }}>
+                    <span style={{ fontSize:11, color:GRAY, fontFamily:"Oswald, sans-serif", letterSpacing:1, textTransform:"uppercase" }}>Valor calculado:</span>
+                    <span style={{ fontSize:15, color:WINE, fontFamily:"Oswald, sans-serif", fontWeight:700 }}>{fmt(calcCm2(+form.precoFinal, form.dimensoes))}/cm²</span>
+                  </div>
+                )}
                 <div style={{ display:"flex", gap:10 }}>
                   <button type="submit" disabled={saving} style={{ background:WINE, color:"#FFF", border:"none", cursor:"pointer", fontFamily:"Oswald, sans-serif", fontWeight:600, fontSize:13, padding:"9px 20px", borderRadius:3, opacity:saving?0.7:1 }}>{saving?"A guardar...":"Guardar"}</button>
-                  <button type="button" onClick={() => setShowForm(false)} style={{ background:"none", border:`1px solid ${BORDER}`, color:GRAY, cursor:"pointer", fontFamily:"Oswald, sans-serif", fontSize:13, padding:"9px 20px", borderRadius:3 }}>Cancelar</button>
+                  <button type="button" onClick={() => { setShowForm(false); setExtractUrl(""); setForm(emptyForm); }} style={{ background:"none", border:`1px solid ${BORDER}`, color:GRAY, cursor:"pointer", fontFamily:"Oswald, sans-serif", fontSize:13, padding:"9px 20px", borderRadius:3 }}>Cancelar</button>
                 </div>
               </form>
             </div>
           )}
+
           <div style={card}>
-            <div style={{ display:"grid", gridTemplateColumns:"2fr 1.4fr 1fr 1fr 1fr 80px 90px", gap:8, paddingBottom:10, borderBottom:`1px solid ${BORDER}`, marginBottom:2 }}>
-              {["Obra","Casa / País","Estimativa","Martelo","Final","Estado","Lote"].map(h => (
+            <div style={{ display:"grid", gridTemplateColumns:"2fr 1.4fr 1fr 1fr 1fr 90px", gap:8, paddingBottom:10, borderBottom:`1px solid ${BORDER}`, marginBottom:2 }}>
+              {["Obra","Casa / País","Data","Preço de venda","€ / cm²","Lote"].map(h => (
                 <div key={h} style={{ fontSize:10, letterSpacing:1.5, textTransform:"uppercase", color:GRAY, fontFamily:"Oswald, sans-serif" }}>{h}</div>
               ))}
             </div>
             {obrasFiltradas.length===0 && <div style={{ padding:"28px 0", textAlign:"center", color:GRAY, fontSize:13, fontStyle:"italic" }}>Nenhuma obra encontrada.</div>}
-            {obrasFiltradas.map(o => (
-              <div key={o.id} className="hrow" onClick={() => setObraDetalhe(o)} style={{ display:"grid", gridTemplateColumns:"2fr 1.4fr 1fr 1fr 1fr 80px 90px", gap:8, alignItems:"center", borderBottom:`1px solid ${BORDER}`, padding:"12px 0" }}>
-                <div>
-                  <div style={{ fontSize:13, color:BLACK }}>{o.titulo}</div>
-                  <div style={{ fontSize:11, color:GRAY, marginTop:2 }}>{o.tecnica} · {fmtDate(o.data)}</div>
+            {obrasFiltradas.map(o => {
+              const cm2 = calcCm2(o.precoFinal, o.dimensoes);
+              return (
+                <div key={o.id} className="hrow" onClick={() => setObraDetalhe(o)} style={{ display:"grid", gridTemplateColumns:"2fr 1.4fr 1fr 1fr 1fr 90px", gap:8, alignItems:"center", borderBottom:`1px solid ${BORDER}`, padding:"12px 0" }}>
+                  <div>
+                    <div style={{ fontSize:13, color:BLACK }}>{o.titulo}</div>
+                    <div style={{ fontSize:11, color:GRAY, marginTop:2 }}>{o.tecnica} · {o.dimensoes}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:12, color:BLACK }}>{o.casa}</div>
+                    <div style={{ fontSize:11, color:GRAY }}>{o.pais}</div>
+                  </div>
+                  <div style={{ fontSize:12, color:GRAY }}>{fmtDate(o.data)}</div>
+                  <div style={{ fontSize:14, color:WINE, fontFamily:"Oswald, sans-serif", fontWeight:600 }}>{fmt(o.precoFinal)}</div>
+                  <div style={{ fontSize:13, color:"#C4763A", fontFamily:"Oswald, sans-serif" }}>{cm2 ? fmt(cm2)+"/cm²" : "—"}</div>
+                  <div onClick={e=>e.stopPropagation()}><LinkBtn url={o.url}/></div>
                 </div>
-                <div>
-                  <div style={{ fontSize:12, color:BLACK }}>{o.casa}</div>
-                  <div style={{ fontSize:11, color:GRAY }}>{o.pais}</div>
-                </div>
-                <div style={{ fontSize:12, color:GRAY }}>{fmt(o.estimativaMin)}–{fmt(o.estimativaMax)}</div>
-                <div style={{ fontSize:13, color:BLACK }}>{fmt(o.precoMartelo)}</div>
-                <div style={{ fontSize:14, color:WINE, fontFamily:"Oswald, sans-serif", fontWeight:600 }}>{fmt(o.precoFinal)}</div>
-                <span style={{ ...bdg, ...badgeStyle(o.estado) }}>{o.estado}</span>
-                <div onClick={e=>e.stopPropagation()}><LinkBtn url={o.url}/></div>
-              </div>
-            ))}
+              );
+            })}
             {obrasFiltradas.length>0 && <div style={{ paddingTop:10, fontSize:11, color:GRAY, fontStyle:"italic" }}>Clicar numa linha para ver o detalhe completo.</div>}
           </div>
         </>}
@@ -354,7 +479,7 @@ function App() {
           <div style={{ ...card, borderLeft:`3px solid ${WINE}`, borderRadius:"0 3px 3px 0" }}>
             <div style={{ fontSize:11, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:10, fontFamily:"Oswald, sans-serif" }}>Próximo passo recomendado</div>
             <p style={{ fontSize:13, color:GRAY, lineHeight:1.8, fontStyle:"italic" }}>
-              Para cobrir Sotheby's, Bonhams e o mercado asiático, recomenda-se a subscrição do <span style={{ color:BLACK, fontStyle:"normal" }}>Mutualart</span> (aproximadamente €15/mês) com alertas automáticos por artista.
+              Para monitorização automática recomenda-se o <span style={{ color:BLACK, fontStyle:"normal" }}>Mutualart</span> (~€15/mês) — envia alertas por email quando "Manuel Cargaleiro" aparece em qualquer leilão mundial, com estimativa e link directo para o lote.
             </p>
           </div>
         </>}
