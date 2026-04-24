@@ -21,7 +21,7 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState } = React;
+const { useState, useEffect } = React;
 
 const WINE = "#6B1A1A";
 const BLACK = "#1A1A1A";
@@ -30,14 +30,52 @@ const BORDER = "#E8E0E0";
 const BG = "#FFFFFF";
 const BG2 = "#FAFAF9";
 
-const INITIAL_DATA = [
-  { id: 1, titulo: "Composição Azul e Branco", casa: "Cabral Moncada Leilões", pais: "🇵🇹 Portugal", data: "2024-03-15", estimativaMin: 8000, estimativaMax: 12000, precoMartelo: 14500, precoFinal: 17400, tecnica: "Azulejo / Cerâmica", dimensoes: "45×45 cm", estado: "Vendida", url: "https://www.cabral-moncada.com" },
-  { id: 2, titulo: "Sem Título (Composição Geométrica)", casa: "Palácio do Correio Velho", pais: "🇵🇹 Portugal", data: "2024-05-22", estimativaMin: 5000, estimativaMax: 8000, precoMartelo: 6200, precoFinal: 7440, tecnica: "Guache sobre papel", dimensoes: "30×40 cm", estado: "Vendida", url: "https://www.pcvelho.com" },
-  { id: 3, titulo: "Forme Bleue", casa: "Drouot — Millon", pais: "🇫🇷 França", data: "2024-06-10", estimativaMin: 3000, estimativaMax: 5000, precoMartelo: null, precoFinal: null, tecnica: "Serigrafia", dimensoes: "70×50 cm", estado: "Não Vendida", url: "https://www.drouot.com" },
-  { id: 4, titulo: "Painel Cerâmico — Série Mediterrâneo", casa: "Veritas", pais: "🇵🇹 Portugal", data: "2024-09-18", estimativaMin: 15000, estimativaMax: 22000, precoMartelo: 25000, precoFinal: 30000, tecnica: "Cerâmica", dimensoes: "120×60 cm", estado: "Vendida", url: "https://www.veritas.pt" },
-  { id: 5, titulo: "Composition Méditerranéenne", casa: "Christie's Paris", pais: "🇫🇷 França", data: "2025-01-30", estimativaMin: 20000, estimativaMax: 35000, precoMartelo: 42000, precoFinal: 50400, tecnica: "Óleo sobre tela", dimensoes: "80×100 cm", estado: "Vendida", url: "https://www.christies.com" },
-  { id: 6, titulo: "Azulejos — Painel Decorativo", casa: "Leiria & Nascimento", pais: "🇵🇹 Portugal", data: "2025-03-05", estimativaMin: 4000, estimativaMax: 6000, precoMartelo: 5500, precoFinal: 6600, tecnica: "Azulejo", dimensoes: "60×60 cm", estado: "Vendida", url: "" },
-];
+// Configuração Airtable
+const AT_TOKEN = "patxkmzRpc0AAi77q.d30dc72a4e4921f5e98d5833d06c8287114bba8aa5570573067971818caa2042";
+const AT_BASE  = "apprSrFIqBVzgQWmY";
+const AT_TABLE = "tblhldohdfFSYWROp";
+const AT_URL   = `https://api.airtable.com/v0/${AT_BASE}/${AT_TABLE}`;
+const AT_HEADS = { "Authorization": `Bearer ${AT_TOKEN}`, "Content-Type": "application/json" };
+
+// Converter registo Airtable → objecto interno
+function fromAT(rec) {
+  const f = rec.fields;
+  return {
+    id: rec.id,
+    titulo: f["Título"] || "",
+    casa: f["Casa de Leilões"] || "",
+    pais: f["País"] || "",
+    data: f["Data"] || "",
+    estimativaMin: f["Estimativa Mínima"] || null,
+    estimativaMax: f["Estimativa Máxima"] || null,
+    precoMartelo: f["Preço Martelo"] || null,
+    precoFinal: f["Preço Final"] || null,
+    tecnica: f["Técnica"] || "",
+    dimensoes: f["Dimensões"] || "",
+    estado: f["Estado"] || "",
+    url: f["URL do Lote"] || "",
+    notas: f["Notas"] || "",
+  };
+}
+
+// Converter objecto interno → campos Airtable
+function toAT(o) {
+  const f = {};
+  if (o.titulo)       f["Título"] = o.titulo;
+  if (o.casa)         f["Casa de Leilões"] = o.casa;
+  if (o.pais)         f["País"] = o.pais;
+  if (o.data)         f["Data"] = o.data;
+  if (o.estimativaMin) f["Estimativa Mínima"] = +o.estimativaMin;
+  if (o.estimativaMax) f["Estimativa Máxima"] = +o.estimativaMax;
+  if (o.precoMartelo) f["Preço Martelo"] = +o.precoMartelo;
+  if (o.precoFinal)   f["Preço Final"] = +o.precoFinal;
+  if (o.tecnica)      f["Técnica"] = o.tecnica;
+  if (o.dimensoes)    f["Dimensões"] = o.dimensoes;
+  if (o.estado)       f["Estado"] = o.estado;
+  if (o.url)          f["URL do Lote"] = o.url;
+  if (o.notas)        f["Notas"] = o.notas;
+  return f;
+}
 
 const CASAS = [
   { nome: "Cabral Moncada Leilões", pais: "🇵🇹", ativa: true },
@@ -51,7 +89,7 @@ const CASAS = [
 ];
 
 const fmt = v => v ? new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(v) : "—";
-const fmtDate = d => new Date(d).toLocaleDateString("pt-PT", { day: "2-digit", month: "short", year: "numeric" });
+const fmtDate = d => d ? new Date(d).toLocaleDateString("pt-PT", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 
 function IconLink() {
   return (
@@ -67,7 +105,7 @@ function LinkBtn({ url }) {
   if (!url) return <span style={{ fontSize: 10, color: "#CCC", fontStyle: "italic" }}>sem link</span>;
   return (
     <a href={url} target="_blank" rel="noopener noreferrer"
-      style={{ display: "inline-flex", alignItems: "center", gap: 5, color: WINE, fontSize: 11, border: `1px solid ${BORDER}`, borderRadius: 2, padding: "3px 8px", transition: "all 0.15s" }}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, color: WINE, fontSize: 11, border: `1px solid ${BORDER}`, borderRadius: 2, padding: "3px 8px" }}
       onMouseOver={e => { e.currentTarget.style.background = "#FDF2F2"; e.currentTarget.style.borderColor = WINE; }}
       onMouseOut={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = BORDER; }}>
       <IconLink /> Ver lote
@@ -76,45 +114,87 @@ function LinkBtn({ url }) {
 }
 
 function App() {
-  const [obras, setObras] = useState(INITIAL_DATA);
+  const [obras, setObras] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [erro, setErro] = useState(null);
   const [tab, setTab] = useState("dashboard");
   const [filtro, setFiltro] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [obraDetalhe, setObraDetalhe] = useState(null);
   const [scanStatus, setScanStatus] = useState("idle");
   const [lastScan, setLastScan] = useState("Nunca realizada");
-  const [form, setForm] = useState({ titulo: "", casa: "", pais: "", data: "", estimativaMin: "", estimativaMax: "", precoMartelo: "", precoFinal: "", tecnica: "", dimensoes: "", estado: "Vendida", url: "" });
+  const emptyForm = { titulo: "", casa: "", pais: "", data: "", estimativaMin: "", estimativaMax: "", precoMartelo: "", precoFinal: "", tecnica: "", dimensoes: "", estado: "Vendida", url: "", notas: "" };
+  const [form, setForm] = useState(emptyForm);
 
-  const vendidas = obras.filter(o => o.estado === "Vendida");
-  const totalVendas = vendidas.reduce((s, o) => s + (o.precoFinal || 0), 0);
-  const mediaVenda = vendidas.length ? Math.round(totalVendas / vendidas.length) : 0;
-  const maxVenda = Math.max(...vendidas.map(o => o.precoFinal || 0));
-  const obrasFiltradas = obras.filter(o =>
-    o.titulo.toLowerCase().includes(filtro.toLowerCase()) ||
-    o.casa.toLowerCase().includes(filtro.toLowerCase())
-  );
+  // Carregar obras do Airtable
+  async function carregarObras() {
+    setLoading(true);
+    setErro(null);
+    try {
+      const res = await fetch(`${AT_URL}?sort[0][field]=Data&sort[0][direction]=desc`, { headers: AT_HEADS });
+      if (!res.ok) throw new Error("Erro ao carregar dados");
+      const data = await res.json();
+      setObras((data.records || []).map(fromAT));
+    } catch(e) {
+      setErro("Não foi possível ligar ao Airtable. Verifica a ligação à internet.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  function handleAdd(e) {
+  useEffect(() => { carregarObras(); }, []);
+
+  // Guardar obra nova no Airtable
+  async function handleAdd(e) {
     e.preventDefault();
-    setObras(p => [{ ...form, id: Date.now(), estimativaMin: +form.estimativaMin, estimativaMax: +form.estimativaMax, precoMartelo: form.precoMartelo ? +form.precoMartelo : null, precoFinal: form.precoFinal ? +form.precoFinal : null }, ...p]);
-    setShowForm(false);
-    setForm({ titulo: "", casa: "", pais: "", data: "", estimativaMin: "", estimativaMax: "", precoMartelo: "", precoFinal: "", tecnica: "", dimensoes: "", estado: "Vendida", url: "" });
+    setSaving(true);
+    try {
+      const res = await fetch(AT_URL, {
+        method: "POST",
+        headers: AT_HEADS,
+        body: JSON.stringify({ fields: toAT(form) })
+      });
+      if (!res.ok) throw new Error("Erro ao guardar");
+      const data = await res.json();
+      setObras(p => [fromAT(data), ...p]);
+      setShowForm(false);
+      setForm(emptyForm);
+    } catch(e) {
+      alert("Erro ao guardar a obra. Tenta novamente.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   function scan() {
     setScanStatus("scanning");
-    setTimeout(() => { setScanStatus("done"); setLastScan(new Date().toLocaleString("pt-PT")); setTimeout(() => setScanStatus("idle"), 3000); }, 2500);
+    setTimeout(() => {
+      setScanStatus("done");
+      setLastScan(new Date().toLocaleString("pt-PT"));
+      carregarObras();
+      setTimeout(() => setScanStatus("idle"), 3000);
+    }, 2500);
   }
 
   function exportCSV() {
     const h = ["Título","Casa","País","Data","Est.Mín","Est.Máx","Martelo","Final","Técnica","Dimensões","Estado","URL"];
-    const rows = obras.map(o => [o.titulo, o.casa, o.pais.replace(/[^\w\s]/g,"").trim(), o.data, o.estimativaMin, o.estimativaMax, o.precoMartelo||"", o.precoFinal||"", o.tecnica, o.dimensoes, o.estado, o.url||""]);
+    const rows = obras.map(o => [o.titulo, o.casa, o.pais, o.data, o.estimativaMin||"", o.estimativaMax||"", o.precoMartelo||"", o.precoFinal||"", o.tecnica, o.dimensoes, o.estado, o.url||""]);
     const csv = [h,...rows].map(r=>r.join(";")).join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"}));
     a.download = `cargaleiro-leiloes-${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
   }
+
+  const vendidas = obras.filter(o => o.estado === "Vendida");
+  const totalVendas = vendidas.reduce((s, o) => s + (o.precoFinal || 0), 0);
+  const mediaVenda = vendidas.length ? Math.round(totalVendas / vendidas.length) : 0;
+  const maxVenda = Math.max(1, ...vendidas.map(o => o.precoFinal || 0));
+  const obrasFiltradas = obras.filter(o =>
+    o.titulo.toLowerCase().includes(filtro.toLowerCase()) ||
+    o.casa.toLowerCase().includes(filtro.toLowerCase())
+  );
 
   const badgeStyle = e => e === "Vendida" ? { background:"#F2F8F2",color:"#1E5C1E",border:"1px solid #C0DCC0" } : e === "A Decorrer" ? { background:"#FFF9EC",color:"#7A5800",border:"1px solid #E8D490" } : { background:"#FDF2F2",color:WINE,border:"1px solid #E8C0C0" };
   const card = { background:BG, border:`1px solid ${BORDER}`, borderRadius:3, padding:"22px 24px" };
@@ -168,9 +248,12 @@ function App() {
             <div style={{ fontSize:17, color:WINE }}>Monitor de Leilões</div>
           </div>
         </div>
-        <div style={{ textAlign:"right" }}>
-          <div style={{ fontSize:10, letterSpacing:1.5, textTransform:"uppercase", color:GRAY, marginBottom:3 }}>Última verificação</div>
-          <div style={{ fontSize:12, color:BLACK }}>{lastScan}</div>
+        <div style={{ display:"flex", alignItems:"center", gap:20 }}>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:10, letterSpacing:1.5, textTransform:"uppercase", color:GRAY, marginBottom:3 }}>Última verificação</div>
+            <div style={{ fontSize:12, color:BLACK }}>{lastScan}</div>
+          </div>
+          <button onClick={carregarObras} style={{ background:"none", border:`1px solid ${BORDER}`, color:GRAY, cursor:"pointer", fontFamily:"Georgia,serif", fontSize:11, padding:"6px 12px", borderRadius:3 }}>↺ Actualizar</button>
         </div>
       </div>
 
@@ -183,7 +266,11 @@ function App() {
 
       <div style={{ padding:"30px 36px", maxWidth:1100 }}>
 
-        {tab === "dashboard" && <>
+        {/* Estado de carregamento */}
+        {loading && <div style={{ textAlign:"center", padding:"60px 0", color:GRAY, fontSize:14, fontStyle:"italic" }}>A carregar dados do Airtable...</div>}
+        {erro && <div style={{ background:"#FDF2F2", border:`1px solid #E8C0C0`, borderRadius:3, padding:"16px 20px", color:WINE, fontSize:13, marginBottom:20 }}>{erro}</div>}
+
+        {!loading && tab === "dashboard" && <>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:24 }}>
             {[[obras.length,"Obras registadas"],[vendidas.length,"Vendidas"],[fmt(totalVendas),"Volume total"],[fmt(mediaVenda),"Média por obra"]].map(([n,l],i) => (
               <div key={i} style={card}>
@@ -199,10 +286,11 @@ function App() {
               <button onClick={scan} disabled={scanStatus==="scanning"} style={{ background:WINE, color:"#FFF", border:"none", cursor:"pointer", fontFamily:"Georgia,serif", fontSize:12, padding:"9px 20px", borderRadius:3, width:"100%", opacity:scanStatus==="scanning"?0.7:1 }}>
                 {scanStatus==="scanning"?"A verificar...":scanStatus==="done"?"✓  Concluído":"Verificar agora"}
               </button>
-              {scanStatus==="done" && <div style={{ marginTop:8, fontSize:11, color:"#1E5C1E", textAlign:"center" }}>Nenhuma obra nova identificada.</div>}
+              {scanStatus==="done" && <div style={{ marginTop:8, fontSize:11, color:"#1E5C1E", textAlign:"center" }}>Dados actualizados do Airtable.</div>}
             </div>
             <div style={card}>
               <div style={{ fontSize:10, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:14 }}>Preços de venda</div>
+              {vendidas.length === 0 ? <div style={{ fontSize:13, color:GRAY, fontStyle:"italic" }}>Sem obras vendidas registadas.</div> :
               <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                 {vendidas.slice(0,5).map((o,i) => (
                   <div key={i}>
@@ -215,12 +303,14 @@ function App() {
                     </div>
                   </div>
                 ))}
-              </div>
+              </div>}
             </div>
           </div>
           <div style={card}>
             <div style={{ fontSize:10, letterSpacing:2, textTransform:"uppercase", color:GRAY, marginBottom:14 }}>Obras recentes</div>
-            {obras.slice(0,5).map(o => (
+            {obras.length === 0
+              ? <div style={{ padding:"20px 0", textAlign:"center", color:GRAY, fontSize:13, fontStyle:"italic" }}>Nenhuma obra registada ainda. Usa o separador "Registo de obras" para adicionar.</div>
+              : obras.slice(0,5).map(o => (
               <div key={o.id} className="hrow" onClick={() => setObraDetalhe(o)} style={{ borderBottom:`1px solid ${BORDER}`, padding:"12px 0", display:"flex", alignItems:"center", gap:16 }}>
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:14, color:BLACK, marginBottom:3 }}>{o.titulo}</div>
@@ -233,11 +323,11 @@ function App() {
                 </div>
               </div>
             ))}
-            <div style={{ paddingTop:10, fontSize:11, color:GRAY, fontStyle:"italic" }}>Clicar numa linha para ver o detalhe completo da obra.</div>
+            {obras.length > 0 && <div style={{ paddingTop:10, fontSize:11, color:GRAY, fontStyle:"italic" }}>Clicar numa linha para ver o detalhe completo.</div>}
           </div>
         </>}
 
-        {tab === "obras" && <>
+        {!loading && tab === "obras" && <>
           <div style={{ display:"flex", gap:10, marginBottom:18, alignItems:"center" }}>
             <input style={{ ...inp, flex:1 }} placeholder="Pesquisar por título ou casa..." value={filtro} onChange={e => setFiltro(e.target.value)}/>
             <button onClick={exportCSV} style={{ background:"none", border:`1px solid ${BORDER}`, color:GRAY, cursor:"pointer", fontFamily:"Georgia,serif", fontSize:12, padding:"9px 18px", borderRadius:3 }}>↓ Exportar CSV</button>
@@ -254,7 +344,7 @@ function App() {
                   <div><label style={lbl}>País</label>
                     <select style={inp} value={form.pais} onChange={e => setForm(p=>({...p,pais:e.target.value}))}>
                       <option value="">Selecionar</option>
-                      <option>🇵🇹 Portugal</option><option>🇫🇷 França</option><option>🇪🇸 Espanha</option><option>🌍 Internacional</option>
+                      <option>Portugal</option><option>França</option><option>Outros</option>
                     </select>
                   </div>
                   <div><label style={lbl}>Data</label><input type="date" style={inp} value={form.data} onChange={e => setForm(p=>({...p,data:e.target.value}))}/></div>
@@ -270,9 +360,13 @@ function App() {
                     <label style={lbl}>URL do lote no leilão</label>
                     <input type="url" style={{ ...inp, fontFamily:"monospace", fontSize:12 }} placeholder="https://www.casadeleiloes.com/lote/..." value={form.url} onChange={e => setForm(p=>({...p,url:e.target.value}))}/>
                   </div>
+                  <div style={{ gridColumn:"1 / -1" }}>
+                    <label style={lbl}>Notas</label>
+                    <textarea style={{ ...inp, height:70, resize:"vertical" }} value={form.notas} onChange={e => setForm(p=>({...p,notas:e.target.value}))}/>
+                  </div>
                 </div>
                 <div style={{ display:"flex", gap:10 }}>
-                  <button type="submit" style={{ background:WINE, color:"#FFF", border:"none", cursor:"pointer", fontFamily:"Georgia,serif", fontSize:12, padding:"9px 20px", borderRadius:3 }}>Guardar</button>
+                  <button type="submit" disabled={saving} style={{ background:WINE, color:"#FFF", border:"none", cursor:"pointer", fontFamily:"Georgia,serif", fontSize:12, padding:"9px 20px", borderRadius:3, opacity:saving?0.7:1 }}>{saving?"A guardar...":"Guardar"}</button>
                   <button type="button" onClick={() => setShowForm(false)} style={{ background:"none", border:`1px solid ${BORDER}`, color:GRAY, cursor:"pointer", fontFamily:"Georgia,serif", fontSize:12, padding:"9px 20px", borderRadius:3 }}>Cancelar</button>
                 </div>
               </form>
@@ -302,11 +396,11 @@ function App() {
                 <div onClick={e => e.stopPropagation()}><LinkBtn url={o.url}/></div>
               </div>
             ))}
-            <div style={{ paddingTop:10, fontSize:11, color:GRAY, fontStyle:"italic" }}>Clicar numa linha para ver o detalhe completo da obra.</div>
+            {obrasFiltradas.length > 0 && <div style={{ paddingTop:10, fontSize:11, color:GRAY, fontStyle:"italic" }}>Clicar numa linha para ver o detalhe completo.</div>}
           </div>
         </>}
 
-        {tab === "casas" && <>
+        {!loading && tab === "casas" && <>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:GRAY, marginBottom:18 }}>
             {CASAS.filter(c=>c.ativa).length} casas ativas · {CASAS.filter(c=>!c.ativa).length} pendentes de integração
           </div>
